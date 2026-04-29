@@ -17,3 +17,12 @@ type Payment struct {
 	Amount        int64 // in cents
 	Status        string
 }
+
+// PaymentEvent is the message published to the message broker after a payment.
+type PaymentEvent struct {
+	EventID       string `json:"event_id"`
+	OrderID       string `json:"order_id"`
+	Amount        int64  `json:"amount"`
+	CustomerEmail string `json:"customer_email"`
+	Status        string `json:"status"`
+}

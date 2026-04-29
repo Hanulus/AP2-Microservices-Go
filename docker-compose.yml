@@ -22,6 +22,20 @@ services:
       - payments-db-data:/var/lib/postgresql/data
       - ./payment-service/migrations/001_create_payments.sql:/docker-entrypoint-initdb.d/init.sql
 
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    ports:
+      - "5672:5672"   # AMQP
+      - "15672:15672" # Management UI (guest/guest)
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   payment-service:
     build:
       context: .
@@ -37,8 +51,12 @@ services:
       DB_NAME: payments_db
       PORT: 9081
       GRPC_PORT: 9082
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
     depends_on:
-      - payments-db
+      rabbitmq:
+        condition: service_healthy
+      payments-db:
+        condition: service_started
     restart: on-failure
 
   order-service:
@@ -60,6 +78,17 @@ services:
     depends_on:
       - orders-db
       - payment-service
+    restart: on-failure
+
+  notification-service:
+    build:
+      context: .
+      dockerfile: notification-service/Dockerfile
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
     restart: on-failure
 
 volumes:

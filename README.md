@@ -11,39 +11,53 @@
 
 ## Architecture (Assignment 3)
 
-```
-[Client]
-   |
-   | REST (POST /orders)
-   v
-[Order Service :9080]
-   |
-   | gRPC (ProcessPayment)                     Assignment 2
-   v
-[Payment Service :9081/:9082]
-   |
-   | Publish JSON event → payment.completed    Assignment 3 (NEW)
-   v
-[RabbitMQ Broker]
-   |
-   | Consume (manual ACK, durable queue)
-   v
-[Notification Service]
-   |
-   | [Notification] Sent email to customer-xxx@example.com for Order #... Amount: $...
-   v
-(console log — simulated email)
+```mermaid
+flowchart TD
+    Client([🧑 Client]):::client
 
-         ↓ on failure (3 retries exceeded)
-[Dead Letter Queue: payment.dead-letter]
+    Client -->|"POST /orders (REST)"| OS
+
+    subgraph A2["Assignment 2 — gRPC"]
+        OS["Order Service\n:9080"]
+        PS["Payment Service\n:9081 / :9082"]
+        ODB[("Orders DB\nPostgreSQL")]
+        PDB[("Payments DB\nPostgreSQL")]
+
+        OS -->|"gRPC ProcessPayment"| PS
+        OS --> ODB
+        PS --> PDB
+    end
+
+    subgraph A3["Assignment 3 — Event-Driven (NEW)"]
+        RMQ{{"RabbitMQ Broker\n:5672"}}
+        NS["Notification Service"]
+        DLQ[("Dead Letter Queue\npayment.dead-letter")]
+        LOG([" Console Log\nSent email to..."])
+
+        RMQ -->|"Consume\n(manual ACK, durable)"| NS
+        NS -->|"✅ ACK after success"| RMQ
+        NS --> LOG
+        NS -->|"❌ 3 retries failed\nNACK no-requeue"| DLQ
+    end
+
+    PS -->|"Publish PaymentEvent JSON\npayment.completed"| RMQ
+
+    classDef client fill:#dbeafe,stroke:#3b82f6,color:#1e3a8a
+    classDef broker fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef dlq fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef log fill:#dcfce7,stroke:#22c55e,color:#14532d
+
+    class RMQ broker
+    class DLQ dlq
+    class LOG log
 ```
 
-**Full flow:**
-1. Client POSTs `/orders` → Order Service saves order (Pending), calls Payment via gRPC
-2. Payment Service saves to DB, publishes `PaymentEvent` JSON to `payment.completed` queue
-3. Notification Service consumes the event, logs the simulated email, sends manual ACK
-4. If the same event arrives again → idempotency check skips it
-5. If processing fails 3 times → message is routed to `payment.dead-letter` (DLQ)
+**Поток событий:**
+1. Client → `POST /orders` → Order Service сохраняет заказ (Pending), вызывает Payment по gRPC
+2. Payment Service сохраняет в БД, публикует `PaymentEvent` JSON в очередь `payment.completed`
+3. Notification Service получает событие, логирует email, отправляет manual ACK
+4. Тот же event_id приходит снова → idempotency check пропускает дубль
+5. Ошибка 3 раза подряд → сообщение уходит в `payment.dead-letter` (DLQ)
 
 ---
 

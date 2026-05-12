@@ -22,11 +22,21 @@ services:
       - payments-db-data:/var/lib/postgresql/data
       - ./payment-service/migrations/001_create_payments.sql:/docker-entrypoint-initdb.d/init.sql
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   rabbitmq:
     image: rabbitmq:3.13-management-alpine
     ports:
-      - "5672:5672"   # AMQP
-      - "15672:15672" # Management UI (guest/guest)
+      - "5672:5672"
+      - "15672:15672"
     environment:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
@@ -41,8 +51,8 @@ services:
       context: .
       dockerfile: payment-service/Dockerfile
     ports:
-      - "9081:9081"   # REST port
-      - "9082:9082"   # gRPC port
+      - "9081:9081"
+      - "9082:9082"
     environment:
       DB_HOST: payments-db
       DB_PORT: 5432
@@ -64,8 +74,8 @@ services:
       context: .
       dockerfile: order-service/Dockerfile
     ports:
-      - "9080:9080"   # REST port
-      - "9083:9083"   # gRPC streaming port
+      - "9080:9080"
+      - "9083:9083"
     environment:
       DB_HOST: orders-db
       DB_PORT: 5432
@@ -75,9 +85,14 @@ services:
       PORT: 9080
       GRPC_PORT: 9083
       PAYMENT_GRPC_ADDR: payment-service:9082
+      REDIS_ADDR: redis:6379
+      CACHE_TTL_SECONDS: 300
+      RATE_LIMIT_MAX: 10
+      RATE_LIMIT_WINDOW_SECONDS: 60
     depends_on:
       - orders-db
       - payment-service
+      - redis
     restart: on-failure
 
   notification-service:
@@ -86,8 +101,13 @@ services:
       dockerfile: notification-service/Dockerfile
     environment:
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      REDIS_ADDR: redis:6379
+      PROVIDER_MODE: SIMULATED
+      MAX_RETRIES: 3
     depends_on:
       rabbitmq:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     restart: on-failure
 

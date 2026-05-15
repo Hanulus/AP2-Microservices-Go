@@ -8,7 +8,7 @@ import (
 )
 
 // SimulatedProvider pretends to send emails.
-// It adds realistic latency and fails ~30% of the time to exercise retry logic.
+// It adds realistic latency and fails ~80% of the time to exercise retry logic.
 type SimulatedProvider struct{}
 
 func NewSimulatedProvider() *SimulatedProvider {
@@ -19,8 +19,8 @@ func (s *SimulatedProvider) Send(to, subject, body string) error {
 	// Simulate network latency (100–500 ms)
 	time.Sleep(time.Duration(100+rand.Intn(400)) * time.Millisecond)
 
-	// Fail ~30% of calls so callers can test exponential backoff
-	if rand.Float32() < 0.3 {
+	// Fail ~80% of calls so callers can test exponential backoff
+	if rand.Float32() < 0.8 {
 		log.Printf("[SimulatedProvider] FAIL sending to %s", to)
 		return errors.New("simulated provider: transient network error")
 	}

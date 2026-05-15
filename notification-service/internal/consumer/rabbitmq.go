@@ -49,8 +49,8 @@ func NewConsumer(url string, w *worker.Worker) (*Consumer, error) {
 		return nil, err
 	}
 
-	// Process one message at a time (fair dispatch)
-	if err := ch.Qos(1, 0, false); err != nil {
+	// Allow up to 10 messages in-flight so goroutines can process them in parallel
+	if err := ch.Qos(10, 0, false); err != nil {
 		ch.Close()
 		conn.Close()
 		return nil, fmt.Errorf("rabbitmq qos: %w", err)
@@ -106,14 +106,15 @@ func (c *Consumer) handle(msg amqp.Delivery) {
 		Amount:        event.Amount,
 	}
 
-	// Worker handles idempotency, retries, and backoff internally
-	if err := c.worker.Process(job); err != nil {
-		log.Printf("[Consumer] Worker failed permanently for payment %s → DLQ: %v", event.EventID, err)
-		msg.Nack(false, false) // send to DLQ after all retries exhausted
-		return
-	}
-
-	msg.Ack(false)
+	// Each message is processed in its own goroutine so notifications run in parallel
+	go func() {
+		if err := c.worker.Process(job); err != nil {
+			log.Printf("[Consumer] Worker failed permanently for payment %s → DLQ: %v", event.EventID, err)
+			msg.Nack(false, false)
+			return
+		}
+		msg.Ack(false)
+	}()
 }
 
 func (c *Consumer) Close() {

@@ -103,7 +103,7 @@ services:
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
       REDIS_ADDR: redis:6379
       PROVIDER_MODE: SIMULATED
-      MAX_RETRIES: 3
+      MAX_RETRIES: 5
     depends_on:
       rabbitmq:
         condition: service_healthy

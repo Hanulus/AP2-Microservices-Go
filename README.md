@@ -1,223 +1,187 @@
-# AP2 Assignment 4 — Performance Optimization & External Integrations
+# AP2 Assignments 1–4 — Microservices in Go
 
 **Student:** Chingiz Uraimov  
-**Group:** SE-2405  
-
-## Repository Links
-- **Proto Repository:** https://github.com/Hanulus/ap2-protos
-- **Generated Code Repository:** https://github.com/Hanulus/ap2-generated
+**Group:** SE-2405
 
 ---
 
-## Architecture (Assignment 4)
+## System Evolution Across Assignments
+
+```mermaid
+timeline
+    title What was added in each assignment
+    Assignment 1 : Order Service (REST + PostgreSQL)
+    Assignment 2 : Payment Service (gRPC)
+               : gRPC call from Order → Payment
+    Assignment 3 : RabbitMQ message broker
+               : Notification Service (consumer)
+               : Dead Letter Queue
+    Assignment 4 : Redis caching (cache-aside, TTL 5min)
+               : Redis rate limiter (10 req/min/IP)
+               : Adapter Pattern (EmailSender interface)
+               : Exponential backoff (2s→4s→8s→16s→32s)
+               : Parallel goroutines (prefetch 10)
+               : Redis idempotency (notif:sent:{id})
+```
+
+---
+
+## Full Architecture (Assignment 4)
 
 ```mermaid
 flowchart TD
-    Client([🧑 Client]):::client
+    Client([Client]):::client
 
-    Client -->|"POST /orders\nGET /orders/:id\n(REST)"| RL
+    Client -->|"REST :9080"| RL
 
-    subgraph OS["Order Service :9080"]
-        RL["Rate Limiter\nMiddleware\n(Redis — 10 req/min)"]:::redis
-        OH["HTTP Handler"]
-        OUC["Order Use Case"]
-        CACHE["CachedOrderRepo\n(Cache-aside decorator)"]:::redis
-        ODB[("Orders DB\nPostgreSQL")]
+    subgraph OS["Order Service"]
+        RL["Rate Limiter\n10 req/min/IP\n— added A4 —"]:::a4
+        OH["HTTP Handler\n— added A1 —"]:::a1
+        OUC["Order Use Case\n— added A1 —"]:::a1
+        CACHE["CachedOrderRepo\ncache-aside decorator\n— added A4 —"]:::a4
+        ODB[("Orders DB\nPostgreSQL\n— added A1 —")]:::a1
 
         RL --> OH --> OUC --> CACHE
-        CACHE -->|"1. HIT → return cached"| OH
-        CACHE -->|"2. MISS → query DB\nthen write to Redis (TTL 5min)"| ODB
-        CACHE -->|"UpdateStatus →\nDEL cache key"| CACHE
+        CACHE -->|"HIT → return"| OH
+        CACHE -->|"MISS → query"| ODB
+        CACHE -->|"UpdateStatus → DEL key"| CACHE
     end
 
-    subgraph RC["Redis :6379"]
-        RK["order:{id} — cached order\nrate:{ip} — request counter\nnotif:sent:{payment_id} — idempotency"]:::redis
+    subgraph RC["Redis :6379 — added A4"]
+        RK["order:{id} — cached order\nrate:{ip} — request counter\nnotif:sent:{id} — idempotency"]:::a4
     end
-
-    OUC -->|"gRPC ProcessPayment"| PS
-
-    subgraph PS["Payment Service :9081/:9082"]
-        PDB[("Payments DB\nPostgreSQL")]
-        PUB["RabbitMQ Publisher"]
-        PS --> PDB
-        PS --> PUB
-    end
-
-    PUB -->|"PaymentEvent JSON\npayment.completed"| RMQ
-
-    subgraph NS["Notification Service"]
-        CON["RabbitMQ Consumer\n(manual ACK)"]
-        WRK["Worker\n(background)"]:::worker
-        PROV["SimulatedProvider\n(EmailSender interface)"]
-
-        CON --> WRK
-        WRK -->|"1. Check Redis idempotency\n2. Send via provider\n3. Retry on error (exp. backoff)"| PROV
-        WRK -->|"Mark notif:sent:{payment_id}"| RC
-    end
-
-    RMQ{{"RabbitMQ Broker\n:5672"}}
-    DLQ[("Dead Letter Queue\npayment.dead-letter")]
-
-    RMQ -->|"Consume"| CON
-    CON -->|"ACK after success"| RMQ
-    CON -->|"NACK — all retries exhausted"| DLQ
 
     CACHE <-->|"GET / SET / DEL"| RC
     RL <-->|"INCR / EXPIRE"| RC
 
-    classDef client fill:#dbeafe,stroke:#3b82f6,color:#1e3a8a
-    classDef redis fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef worker fill:#dcfce7,stroke:#22c55e,color:#14532d
+    OUC -->|"gRPC ProcessPayment\n— added A2 —"| PS
+
+    subgraph PS["Payment Service :9081 / :9082"]
+        PH["gRPC Handler\n— added A2 —"]:::a2
+        PUC["Payment Use Case\n— added A2 —"]:::a2
+        PDB[("Payments DB\nPostgreSQL\n— added A2 —")]:::a2
+        PUB["RabbitMQ Publisher\n— added A3 —"]:::a3
+
+        PH --> PUC --> PDB
+        PUC --> PUB
+    end
+
+    PUB -->|"PaymentEvent\npayment.completed"| RMQ
+
+    RMQ{{"RabbitMQ :5672\n— added A3 —"}}:::a3
+
+    subgraph NS["Notification Service"]
+        CON["Consumer\nmanual ACK, prefetch 10\n— added A3 —"]:::a3
+        GR["go func per message\nparallel goroutines\n— added A4 —"]:::a4
+        WRK["Worker\nidempotency + backoff\n— added A4 —"]:::a4
+        PROV["SimulatedProvider\nEmailSender interface\nAdapter Pattern\n— added A4 —"]:::a4
+
+        CON --> GR --> WRK --> PROV
+        WRK <-->|"notif:sent:{id}"| RC
+    end
+
+    RMQ -->|"Consume"| CON
+    CON -->|"ACK on success"| RMQ
+    CON -->|"NACK after 5 retries"| DLQ
+
+    DLQ[("Dead Letter Queue\npayment.dead-letter\n— added A3 —")]:::a3
+
+    classDef client fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+    classDef a1 fill:#f3f4f6,stroke:#6b7280,color:#111827
+    classDef a2 fill:#ede9fe,stroke:#7c3aed,color:#3b0764
+    classDef a3 fill:#fef3c7,stroke:#d97706,color:#78350f
+    classDef a4 fill:#dcfce7,stroke:#16a34a,color:#14532d
 ```
 
----
-
-## What Changed from Assignment 3
-
-| Feature | Assignment 3 | Assignment 4 |
-|---|---|---|
-| Order caching | No cache | Redis cache-aside, TTL 5 min |
-| Cache invalidation | — | DEL on status update |
-| Rate limiting | — | Redis INCR, 10 req/min/IP |
-| Notification | In-memory idempotency, fake log | Redis idempotency + real provider interface |
-| Retry strategy | RabbitMQ requeue (fixed attempts) | Exponential backoff inside Worker (2s→4s→8s) |
-| Email provider | Hardcoded log | Swappable via `PROVIDER_MODE` env var |
+**Legend:** grey = A1 · purple = A2 · orange = A3 · green = A4
 
 ---
 
-## Cache Invalidation Strategy
+## Component Map
 
-**Pattern:** Cache-aside (lazy loading)
+| Component | File | Added in |
+|-----------|------|----------|
+| Order HTTP handler | `order-service/internal/transport/http/handler.go` | A1 |
+| Order use case | `order-service/internal/usecase/order.go` | A1 |
+| Orders PostgreSQL repo | `order-service/internal/repository/postgres.go` | A1 |
+| Payment gRPC handler | `payment-service/internal/transport/grpc/handler.go` | A2 |
+| Payment gRPC client | `order-service/internal/repository/payment_grpc_client.go` | A2 |
+| RabbitMQ publisher | `payment-service/internal/infrastructure/rabbitmq/publisher.go` | A3 |
+| RabbitMQ consumer | `notification-service/internal/consumer/rabbitmq.go` | A3 |
+| Dead Letter Queue | declared in `consumer/rabbitmq.go` | A3 |
+| Redis cache decorator | `order-service/internal/cache/order_cache.go` | A4 |
+| Rate limiter middleware | `order-service/internal/transport/http/middleware/rate_limiter.go` | A4 |
+| EmailSender interface | `notification-service/internal/provider/provider.go` | A4 |
+| SimulatedProvider | `notification-service/internal/provider/simulated.go` | A4 |
+| Worker (backoff + idempotency) | `notification-service/internal/worker/worker.go` | A4 |
+| Parallel goroutines | `notification-service/internal/consumer/rabbitmq.go:110` | A4 |
 
-**Read path:**
+---
+
+## Cache-Aside Pattern (Assignment 4)
+
 ```
 GET /orders/:id
-  → Check Redis key "order:{id}"
-  → HIT:  return cached JSON (no DB query)
-  → MISS: query PostgreSQL → write to Redis with TTL 5 min → return result
-```
+  → Check Redis "order:{id}"
+  → HIT:  return cached JSON               ← no DB query
+  → MISS: query PostgreSQL
+          → write to Redis TTL 5 min
+          → return result
 
-**Write path (invalidation):**
-```
-UpdateStatus (called after payment or cancellation)
-  → UPDATE orders SET status = ... WHERE id = ...
-  → DEL "order:{id}"   ← atomic: cache deleted right after DB write
-```
-
-Deleting (rather than updating) the key guarantees that stale data is never served — the next read will fetch fresh data from the DB and re-populate the cache.
-
-**TTL** acts as a safety net: even if invalidation is somehow missed (e.g. direct DB edit), the cache expires in 5 minutes.
-
----
-
-## Retry & Idempotency Strategy
-
-### Idempotency (Notification Service)
-
-Before sending any notification, the Worker checks Redis:
-```
-key = "notif:sent:{payment_id}"
-
-EXISTS key?
-  YES → log "DUPLICATE skipped", return nil  ← no email sent
-  NO  → proceed to send
-        on success → SET key "sent" EX 86400 (24h TTL)
-```
-
-This ensures **exactly-once delivery** even when RabbitMQ re-delivers the same message (at-least-once guarantee).
-
-### Exponential Backoff (Notification Worker)
-
-If the provider returns an error, the worker retries with increasing delays:
-
-```
-attempt 1 → send → FAIL → sleep 2s
-attempt 2 → send → FAIL → sleep 4s
-attempt 3 → send → FAIL → give up
-  → return error to consumer → NACK → DLQ
-```
-
-Formula: `delay = 2s * 2^(attempt-1)` — doubles each time.
-
-The SimulatedProvider fails ~30% of calls randomly, so you can observe retries in the logs:
-```
-[Worker] FAIL payment_id=... attempt=1/3 err=transient network error, retrying in 2s
-[Worker] SUCCESS payment_id=... attempt=2
+UpdateStatus (after payment / cancel)
+  → UPDATE orders SET status = ...
+  → DEL "order:{id}"                       ← immediate invalidation
 ```
 
 ---
 
-## Bonus: Rate Limiter (+10%)
+## Rate Limiter (Assignment 4 — Bonus +10%)
 
-A Redis-based rate limiter middleware is applied globally to the Order Service.
-
-**Logic:**
 ```
 key = "rate:{client_ip}"
 
 INCR key → count
-if count == 1: EXPIRE key 60s   ← start the 1-minute window
-if count > 10: return HTTP 429 Too Many Requests
+if count == 1 → EXPIRE key 60s
+if count > 10 → HTTP 429 Too Many Requests
 ```
 
-Configuration via env vars:
-- `RATE_LIMIT_MAX=10` — max requests per window
-- `RATE_LIMIT_WINDOW_SECONDS=60` — window size in seconds
+Config: `RATE_LIMIT_MAX=10`, `RATE_LIMIT_WINDOW_SECONDS=60`
 
-If Redis is unavailable, the middleware lets requests through (fail-open) to avoid blocking the entire API.
+---
+
+## Notification Reliability (Assignment 4)
+
+### Idempotency
+```
+key = "notif:sent:{payment_id}"
+EXISTS? YES → skip (duplicate)
+        NO  → send → SET key EX 86400
+```
+
+### Exponential Backoff
+```
+attempt 1 → FAIL → sleep 2s
+attempt 2 → FAIL → sleep 4s
+attempt 3 → FAIL → sleep 8s
+attempt 4 → FAIL → sleep 16s
+attempt 5 → FAIL → NACK → Dead Letter Queue
+```
+
+### Parallel Processing
+Each RabbitMQ message spawns a goroutine (`go func()`).  
+Prefetch = 10 — up to 10 messages in-flight simultaneously.
 
 ---
 
 ## How to Run
 
-### Prerequisites
-- Docker & Docker Compose
-
-### Start all services
 ```bash
-docker-compose up --build
+DOCKER_BUILDKIT=0 docker-compose up --build
 ```
 
-This starts:
-- `orders-db` — PostgreSQL for orders
-- `payments-db` — PostgreSQL for payments
-- `redis` — Redis :6379
-- `rabbitmq` — RabbitMQ (management UI at http://localhost:15672, guest/guest)
-- `payment-service` — REST :9081, gRPC :9082
-- `order-service` — REST :9080 (with caching + rate limiter)
-- `notification-service` — background worker
-
-### Create an order
-```bash
-curl -X POST http://localhost:9080/orders \
-  -H "Content-Type: application/json" \
-  -d '{"customer_id":"cust-1","item_name":"Book","amount":500}'
-```
-
-### Get order (cache-aside in action)
-```bash
-# First call: MISS → DB query → cached in Redis
-curl http://localhost:9080/orders/{id}
-
-# Second call: HIT → served from Redis
-curl http://localhost:9080/orders/{id}
-```
-
-Watch order-service logs:
-```
-[Cache] MISS order:xxxxxxxx
-[Cache] HIT  order:xxxxxxxx
-```
-
-### Test rate limiter
-```bash
-# Run 11 times rapidly — the 11th returns HTTP 429
-for i in {1..11}; do curl -s -o /dev/null -w "%{http_code}\n" http://localhost:9080/orders/test; done
-```
-
-### Test exponential backoff
-Watch notification-service logs after creating an order — you'll see retries when the simulated provider fails:
-```
-[Worker] FAIL payment_id=... attempt=1/3, retrying in 2s
-[Worker] SUCCESS payment_id=... attempt=2
-```
+| Service | URL |
+|---------|-----|
+| Order Service REST | http://localhost:9080 |
+| Payment Service REST | http://localhost:9081 |
+| RabbitMQ Management | http://localhost:15672 (guest/guest) |
+| Redis | localhost:6379 |
